@@ -214,7 +214,17 @@ function addSlot(date, time) {
 function getSlotsForDate(date) {
   return db
     .prepare(
-      "SELECT * FROM slots WHERE date = ? AND is_active = 1 ORDER BY time ASC",
+      `
+    SELECT 
+      s.*, 
+      b.name, 
+      b.phone, 
+      b.status 
+    FROM slots s
+    LEFT JOIN bookings b ON s.id = b.slot_id
+    WHERE s.date = ? AND s.is_active = 1
+    ORDER BY s.time ASC
+  `,
     )
     .all(date);
 }

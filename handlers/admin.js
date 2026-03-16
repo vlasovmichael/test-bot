@@ -89,10 +89,15 @@ async function showAdminSettings(ctx, lang) {
           callback_data: "admin:conf_hours",
         },
       ],
-      [{ text: "📝 Редактировать цены", callback_data: "admin:edit_prices" }],
       [
         {
-          text: "🔗 Редактировать портфолио",
+          text: t(lang, "admin_btn_edit_prices"),
+          callback_data: "admin:edit_prices",
+        },
+      ],
+      [
+        {
+          text: t(lang, "admin_btn_edit_portfolio"),
           callback_data: "admin:edit_portfolio",
         },
       ],
@@ -271,12 +276,7 @@ async function handleManageDays(ctx, lang) {
 async function handleAdminDayOverview(ctx, lang, date) {
   const closed = isDayClosed(date);
   const slots = getSlotsForDate(date);
-
-  // Разбиваем строку YYYY-MM-DD корректно
-  const [y, m, d] = date.split("-").map(Number);
-  const dateObj = new Date(y, m - 1, d);
-
-  const displayDate = dateObj.formatWarsawDate(dateObj);
+  const displayDate = formatWarsawDate(date);
 
   // Текущее время для сравнения
   const now = new Date();
@@ -291,14 +291,23 @@ async function handleAdminDayOverview(ctx, lang, date) {
     text += `\n${t(lang, "admin_no_slots")}`;
   } else {
     for (const s of slots) {
-      // Проверяем, не прошло ли уже время этого слота
       const slotTime = new Date(`${date}T${s.time}:00`);
       const isPast = slotTime < now;
+      const pastMarker = isPast ? "⏳" : "🔹";
 
-      const status = s.is_booked ? ` (${t(lang, "admin_slot_booked")})` : "";
-      const pastMarker = isPast ? " ✨" : " •"; // Или любой другой символ для прошедших
+      let statusText = "";
+      if (s.is_booked) {
+        // Если запись есть, но она отменена (предполагаем наличие поля is_canceled)
+        if (s.status === "canceled") {
+          statusText = ` — <s>${s.name}</s> [${t(lang, "admin_slot_canceled")}]`;
+        } else {
+          statusText = ` — <b>${s.name}</b> (${s.phone})`;
+        }
+      } else {
+        statusText = ` — <i>${t(lang, "admin_slot_free")}</i>`;
+      }
 
-      text += `\n${pastMarker} ${s.time}${status}`;
+      text += `\n${pastMarker} <b>${s.time}</b>${statusText}`;
     }
   }
 
@@ -416,33 +425,28 @@ async function showScheduleForDate(ctx, lang, date) {
   const list = getBookingsForDate(date);
   const displayDate = formatWarsawDate(date);
 
+  // Заголовок из локализации
+  let text = t(lang, "admin_schedule_for_date", { date: displayDate });
+
   if (!list.length) {
-    await ctx.editMessageText(
-      t(lang, "admin_schedule_for_date", {
-        date: displayDate,
-      }) +
-        "\n\n" +
-        t(lang, "admin_schedule_empty"),
-      {
-        parse_mode: "HTML",
-        reply_markup: {
-          inline_keyboard: [
-            [{ text: t(lang, "btn_back_main"), callback_data: "admin:main" }],
-          ],
-        },
-      },
-    );
-    return;
-  }
+    text += "\n\n" + t(lang, "admin_schedule_empty");
+  } else {
+    for (const b of list) {
+      const name = b.name || b.user_name_db || "-";
+      const phone = b.phone || b.user_phone_db || "-";
 
-  let text = t(lang, "admin_schedule_for_date", {
-    date: displayDate,
-  });
+      let statusText = "";
+      if (b.status === "canceled") {
+        // Если отмена: зачеркиваем и добавляем статус
+        statusText = ` — <s>${name}</s> [${t(lang, "admin_slot_canceled")}]`;
+      } else {
+        // Если активная запись: используем красивый шаблон
+        statusText = ` — ${t(lang, "admin_client_info", { name, phone })}`;
+      }
 
-  for (const b of list) {
-    const name = b.name || b.user_name_db || "-";
-    const phone = b.phone || b.user_phone_db || "-";
-    text += `\n\n• <b>${b.time}</b> — ${name}, ${phone}, id=${b.user_telegram_id}, status=${b.status}`;
+      // Добавляем строку: Эмодзи + Время + Данные (без ID и технических статусов)
+      text += `\n\n🔹 <b>${b.time}</b>${statusText}`;
+    }
   }
 
   await ctx.editMessageText(text, {
@@ -610,7 +614,13 @@ async function askAdminForPrices(ctx, lang) {
 }
 
 async function askAdminForPortfolio(ctx, lang) {
+  // 1. Устанавливаем шаг в сессии
   ctx.session.admin = { ...ctx.session.admin, step: "enter_portfolio" };
+
+  // 2. Получаем текущее значение (из базы или конфига)
+  // Если там пусто, выводим заглушку "Не задано"
+  const currentText =
+    getSetting("portfolio_text") || t(lang, "admin_portfolio_empty");
 
   const text = t(lang, "admin_portfolio_msg", {
     current: currentText,
@@ -618,10 +628,12 @@ async function askAdminForPortfolio(ctx, lang) {
 
   await ctx.editMessageText(text, {
     parse_mode: "HTML",
+    disable_web_page_preview: true, // Чтобы не вылезало превью старой ссылки
     reply_markup: {
       inline_keyboard: [
         [
           {
+            // Кнопка отмены, которая сбросит шаг в сессии
             text: t(lang, "admin_btn_back"),
             callback_data: "admin:settings",
           },
@@ -632,32 +644,35 @@ async function askAdminForPortfolio(ctx, lang) {
 }
 
 async function askAdminForBroadcast(ctx, lang) {
-  ctx.session.admin = { ...ctx.session.admin, step: "enter_broadcast" };
-  await ctx.editMessageText(
-    "📢 <b>Рассылка об окошках</b>\n\nПришлите текст сообщения. Например:\n<i>«Девочки, освободилось окошко на сегодня на 15:00! Кому красоту?»</i>\n\nСообщение будет отправлено ВСЕМ пользователям бота.",
-    {
-      parse_mode: "HTML",
-      reply_markup: {
-        inline_keyboard: [[{ text: "❌ Отмена", callback_data: "admin:main" }]],
-      },
+  ctx.session.admin = {
+    ...ctx.session.admin,
+    step: "enter_broadcast",
+  };
+
+  await ctx.editMessageText(t(lang, "admin_broadcast_ask"), {
+    parse_mode: "HTML",
+    reply_markup: {
+      inline_keyboard: [
+        [
+          {
+            text: t(lang, "admin_btn_cancel"),
+            callback_data: "admin:main",
+          },
+        ],
+      ],
     },
-  );
+  });
 }
 
 async function showStats(ctx, lang) {
   const stats = getAdminStats();
 
-  const text = `
-📊 <b>Статистика бота</b>
-
-👥 Всего пользователей в базе: <b>${stats.totalUsers}</b>
-👤 Реальных клиентов (с записями): <b>${stats.activeClients}</b>
-
-📅 Предстоящих записей: <b>${stats.upcomingBookings}</b>
-Всего записей за всё время: <b>${stats.totalBookings}</b>
-
-<i>Примечание: Пользователи — это все, кто когда-либо нажал /start.</i>
-  `;
+  const text = t(lang, "admin_stats_text", {
+    totalUsers: stats.totalUsers,
+    activeClients: stats.activeClients,
+    upcoming: stats.upcomingBookings,
+    total: stats.totalBookings,
+  });
 
   await ctx.editMessageText(text, {
     parse_mode: "HTML",

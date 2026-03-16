@@ -481,7 +481,20 @@ bot.on("message:text", async (ctx) => {
     if (adminStep === "enter_prices") {
       setSetting("custom_prices", ctx.message.text);
       ctx.session.admin.step = null;
-      return ctx.reply(t(lang, "admin_prices_updated"), { parse_mode: "HTML" });
+
+      return ctx.reply(t(lang, "admin_prices_updated"), {
+        parse_mode: "HTML",
+        reply_markup: {
+          inline_keyboard: [
+            [
+              {
+                text: `⬅️ ${t(lang, "admin_btn_back")}`,
+                callback_data: "admin:main",
+              },
+            ],
+          ],
+        },
+      });
     }
 
     // --- РЕДАКТИРОВАНИЕ ПОРТФОЛИО ---
@@ -505,9 +518,19 @@ bot.on("message:text", async (ctx) => {
 
       setSetting("portfolio_links", links);
       ctx.session.admin.step = null;
-      return ctx.reply(
-        t(lang, "admin_portfolio_updated", { count: links.length }),
-      );
+      await ctx.reply(`✅ ${t(lang, "admin_portfolio_updated")}`, {
+        reply_markup: {
+          inline_keyboard: [
+            [
+              {
+                text: `⬅️ ${t(lang, "admin_btn_back")}`,
+                callback_data: "admin:main",
+              },
+            ],
+          ],
+        },
+      });
+      return;
     }
 
     // --- РЕДАКТИРОВАНИЕ ЧАСОВ РАБОТЫ ---
@@ -529,10 +552,23 @@ bot.on("message:text", async (ctx) => {
       ctx.session.admin.step = null;
       autoGenerateSlots();
 
-      return ctx.reply(
+      await ctx.reply(
         t(lang, "admin_hours_updated", { start: startTime, end: endTime }),
-        { parse_mode: "HTML" },
+        {
+          parse_mode: "HTML",
+          reply_markup: {
+            inline_keyboard: [
+              [
+                {
+                  text: `⬅️ ${t(lang, "admin_btn_back")}`,
+                  callback_data: "admin:main",
+                },
+              ],
+            ],
+          },
+        },
       );
+      return;
     }
 
     // --- МАССОВАЯ РАССЫЛКА ---
@@ -574,12 +610,27 @@ bot.on("message:text", async (ctx) => {
         }
       }
 
-      return ctx.reply(
+      await ctx.reply(
         t(lang, "admin_broadcast_done", {
           success: successCount,
           fail: failCount,
         }),
+        {
+          parse_mode: "HTML", // На случай, если в тексте есть жирный шрифт
+          reply_markup: {
+            inline_keyboard: [
+              [
+                {
+                  text: `⬅️ ${t(lang, "admin_btn_back")}`,
+                  callback_data: "admin:main",
+                },
+              ],
+            ],
+          },
+        },
       );
+
+      return;
     }
 
     // --- ОСТАЛЬНЫЕ ШАГИ ---
@@ -630,6 +681,12 @@ startReminderScheduler(bot);
 
 // ---------- Старт бота ----------
 autoGenerateSlots();
+
+bot.catch((err) => {
+  const ctx = err.ctx;
+  console.error(`Error while handling update ${ctx.update.update_id}:`);
+  console.error(err.error);
+});
 
 bot.start();
 
