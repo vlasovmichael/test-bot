@@ -138,31 +138,23 @@ function buildTimesKeyboard(lang, date, slots) {
 // handlers/booking.js
 
 async function startBooking(ctx, lang) {
-  const userId = String(ctx.from.id); // Принудительно в строку для БД
-
+  const userId = String(ctx.from.id);
   const activeBookings = getAllActiveBookingsByUser(userId);
-
-  // ЛОГ ДЛЯ ТЕБЯ (потом удалишь):
-  console.log(
-    `[DEBUG] Юзер ${userId} имеет активных записей: ${activeBookings.length}`,
-  );
 
   if (activeBookings && activeBookings.length >= 2) {
     await ctx.answerCallbackQuery();
 
+    // Формируем список. Слово "at" или "в" можно вынести в переводы,
+    // но обычно "Дата — Время" понятно всем.
     const list = activeBookings
-      .map((b) => `• ${b.date} в ${b.time}`)
+      .map((b) => `• ${b.date} — ${b.time}`)
       .join("\n");
 
-    // Отправляем сообщение об ограничении
-    return ctx.reply(
-      t(lang, "booking_limit_reached") ||
-        `⛔️ <b>Превышен лимит записей</b>\n\nУ вас уже есть 2 активных записи:\n${list}\n\nПожалуйста, дождитесь их завершения или отмените одну из них.`,
-      { parse_mode: "HTML" },
-    );
+    return ctx.reply(t(lang, "booking_limit_reached", { list: list }), {
+      parse_mode: "HTML",
+    });
   }
 
-  // Если всё ок — открываем календарь
   await ctx.answerCallbackQuery();
   await ctx.reply(t(lang, "booking_start_title"), {
     parse_mode: "HTML",
@@ -216,7 +208,6 @@ async function handleNameInput(ctx, lang) {
   await ctx.reply(t(lang, "booking_enter_phone"), { parse_mode: "HTML" });
 }
 
-// ПРАВКА 2: Новый этап проверки данных
 async function handlePhoneInput(ctx, lang) {
   const phone = ctx.message.text.trim();
   const phoneRegex = /^\+?[\d\s-]{7,15}$/;
@@ -239,9 +230,12 @@ async function handlePhoneInput(ctx, lang) {
   const keyboard = {
     inline_keyboard: [
       [
-        { text: t(lang, "btn_confirm_yes"), callback_data: "book_confirm:yes" },
-        { text: t(lang, "btn_confirm_no"), callback_data: "book_confirm:no" },
+        {
+          text: t(lang, "btn_confirm_yes"),
+          callback_data: "book_confirm:yes",
+        },
       ],
+      [{ text: t(lang, "btn_confirm_no"), callback_data: "book_confirm:no" }],
     ],
   };
 
@@ -262,21 +256,28 @@ async function handleFinalConfirm(ctx, lang, answer) {
     return ctx.editMessageText(t(lang, "booking_slot_unavailable"));
   }
 
-  // Правильное формирование даты
   const [year, month, day] = slot.date.split("-").map(Number);
   const monthList = monthsGenitive[lang] || monthsGenitive["en"];
-  const displayDate = `${day} ${monthList[month - 1]}`; // month - 1 так как в массиве индексы с 0
+  const displayDate = `${day} ${monthList[month - 1]}`;
 
   try {
-    createBooking({
+    // 1. ВЫЧИСЛЯЕМ ВРЕМЯ НАПОМИНАНИЯ (например, за 24 часа до визита)
+    const appointmentDate = new Date(`${slot.date}T${slot.time}:00`);
+    const reminderDate = new Date(appointmentDate.getTime());
+
+    // Для работы: за 24 часа до визита
+    reminderDate.setHours(reminderDate.getHours() - 24);
+
+    // 2. ДОБАВЛЯЕМ await и передаем reminderAt
+    await createBooking({
       slotId: slot.id,
       userTelegramId: ctx.from.id,
       name: session.name,
       phone: session.phone,
-      appointmentAt: new Date(`${slot.date}T${slot.time}:00`).toISOString(),
+      appointmentAt: appointmentDate.toISOString(),
+      reminderAt: reminderDate.toISOString(),
     });
 
-    // Отправляем ПЕРЕВЕДЕННЫЙ текст пользователю
     const successText = t(lang, "booking_confirmed_success", {
       date: displayDate,
       time: slot.time,
@@ -286,7 +287,7 @@ async function handleFinalConfirm(ctx, lang, answer) {
 
     await ctx.editMessageText(successText, { parse_mode: "HTML" });
 
-    // Уведомление админу (можно оставить на одном языке или тоже локализовать)
+    // Уведомление админу
     const adminMsg = t(lang, "admin_notification_new", {
       name: session.name,
       date: displayDate,
@@ -294,19 +295,23 @@ async function handleFinalConfirm(ctx, lang, answer) {
       phone: session.phone,
     });
 
+    // Лучше отправлять меню ПОСЛЕ подтверждения,
+    // чтобы не перекрывать сообщение об успехе сразу
     await sendMainMenu(ctx, lang);
 
     if (ADMIN_ID) {
-      await ctx.api.sendMessage(ADMIN_ID, adminMsg, { parse_mode: "HTML" });
+      await ctx.api
+        .sendMessage(ADMIN_ID, adminMsg, { parse_mode: "HTML" })
+        .catch((e) => console.error("Admin notify error", e));
     }
 
     if (SCHEDULE_CHANNEL_ID) {
-      await ctx.api.sendMessage(SCHEDULE_CHANNEL_ID, adminMsg, {
-        parse_mode: "HTML",
-      });
+      await ctx.api
+        .sendMessage(SCHEDULE_CHANNEL_ID, adminMsg, { parse_mode: "HTML" })
+        .catch((e) => console.error("Channel notify error", e));
     }
   } catch (e) {
-    console.error(e);
+    console.error("Критическая ошибка при создании брони:", e);
     await ctx.reply(t(lang, "error_generic"));
   } finally {
     ctx.session.booking = null;

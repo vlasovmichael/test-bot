@@ -4,6 +4,7 @@
 import cron from "node-cron";
 import { getDueReminders, markReminderSent } from "../database/db.js";
 import { t } from "../i18n.js";
+import { formatWarsawDate, formatWarsawTime } from "../utils/date.js";
 
 // Запуск периодической задачи
 function startReminderScheduler(bot) {
@@ -13,13 +14,11 @@ function startReminderScheduler(bot) {
     const due = getDueReminders(nowIso);
     for (const row of due) {
       try {
-        const lang = row.language || "ru";
-        const appointment = new Date(row.appointment_at);
-        const dateStr = appointment.toLocaleDateString("pl-PL");
-        const timeStr = appointment.toLocaleTimeString("pl-PL", {
-          hour: "2-digit",
-          minute: "2-digit",
-        });
+        const lang = row.language || "en";
+
+        // Передаем дату прямо в функции
+        const dateStr = formatWarsawDate(row.appointment_at);
+        const timeStr = formatWarsawTime(row.appointment_at);
 
         await bot.api.sendMessage(
           row.user_telegram_id,
@@ -29,7 +28,7 @@ function startReminderScheduler(bot) {
 
         markReminderSent(row.id);
       } catch (e) {
-        // Игнорируем ошибки отправки (пользователь закрыл ЛС и т.п.)
+        console.error("Ошибка отправки напоминания:", e);
         markReminderSent(row.id);
       }
     }

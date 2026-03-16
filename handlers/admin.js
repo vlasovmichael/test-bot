@@ -13,48 +13,58 @@ import {
 } from "../database/db.js";
 import { monthsNominative } from "./months.js";
 import { t } from "../i18n.js";
+import { formatWarsawDate, formatWarsawTime } from "../utils/date.js";
 
 function toDateString(date) {
-  // Используем шведскую локаль 'sv-SE', так как она единственная
-  // возвращает формат YYYY-MM-DD по умолчанию. Это хак, но очень надежный.
-  return date.toLocaleDateString("sv-SE");
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, "0");
+  const d = String(date.getDate()).padStart(2, "0");
+  return `${y}-${m}-${d}`;
 }
 
 function buildAdminMainKeyboard(lang) {
   return {
     inline_keyboard: [
+      // Ряд 1: Настройки и Управление днями
       [
         {
-          text: `⚙️ ${t(lang, "admin_btn_settings")}`,
+          text: t(lang, "admin_btn_settings"),
           callback_data: "admin:settings",
         },
-      ], // Новая кнопка
-      [
         {
           text: t(lang, "admin_btn_manage_days"),
           callback_data: "admin:manage_days",
         },
       ],
+      // Ряд 2: Расписание и Отмена
       [
         {
           text: t(lang, "admin_btn_view_schedule"),
           callback_data: "admin:view_schedule",
         },
-      ],
-      [
         {
           text: t(lang, "admin_btn_cancel_booking"),
           callback_data: "admin:cancel_booking",
         },
       ],
+      // Ряд 3: Оповещение и Статистика
       [
         {
-          text: "📢 Оповестить об окне",
+          text: t(lang, "admin_btn_announcement"),
           callback_data: "admin:broadcast_slot",
         },
+        {
+          text: t(lang, "admin_btn_statistics"),
+          callback_data: "admin:stats",
+        },
       ],
-      [{ text: "📊 Статистика", callback_data: "admin:stats" }],
-      [{ text: `🏠 ${t(lang, "btn_back_main")}`, callback_data: "menu:back" }],
+      // Ряд 4: Кнопка Назад (на всю ширину)
+      [
+        {
+          text: t(lang, "btn_back_main"),
+          callback_data: "menu:back",
+        },
+      ],
     ],
   };
 }
@@ -88,7 +98,7 @@ async function showAdminSettings(ctx, lang) {
       ],
       [
         {
-          text: `⬅️ ${t(lang, "admin_btn_back")}`,
+          text: t(lang, "admin_btn_back"),
           callback_data: "admin:main",
         },
       ],
@@ -115,7 +125,7 @@ async function showStepSettings(ctx, lang) {
       ],
       [
         {
-          text: `⬅️ ${t(lang, "admin_btn_back")}`,
+          text: t(lang, "admin_btn_back"),
           callback_data: "admin:settings",
         },
       ],
@@ -158,7 +168,7 @@ async function showWorkDaysSettings(ctx, lang) {
 
   keyboard.push([
     {
-      text: `⬅️ ${t(lang, "admin_btn_back")}`,
+      text: t(lang, "admin_btn_back"),
       callback_data: "admin:settings",
     },
   ]);
@@ -266,12 +276,7 @@ async function handleAdminDayOverview(ctx, lang, date) {
   const [y, m, d] = date.split("-").map(Number);
   const dateObj = new Date(y, m - 1, d);
 
-  const displayDate = dateObj.toLocaleDateString(lang, {
-    day: "numeric",
-    month: "long",
-    year: "numeric",
-    weekday: "long",
-  });
+  const displayDate = dateObj.formatWarsawDate(dateObj);
 
   // Текущее время для сравнения
   const now = new Date();
@@ -388,7 +393,7 @@ async function handleAdminTimeInput(ctx, lang) {
   addSlot(adminSession.date, timeStr);
   await ctx.reply(
     t(lang, "admin_time_added", {
-      date: new Date(adminSession.date).toLocaleDateString("pl-PL"),
+      date: new Date(adminSession.date).formatWarsawDate(adminSession.date),
       time: timeStr,
     }),
     { parse_mode: "HTML" },
@@ -409,10 +414,12 @@ async function handleAdminViewSchedule(ctx, lang) {
 
 async function showScheduleForDate(ctx, lang, date) {
   const list = getBookingsForDate(date);
+  const displayDate = formatWarsawDate(date);
+
   if (!list.length) {
     await ctx.editMessageText(
       t(lang, "admin_schedule_for_date", {
-        date: new Date(date).toLocaleDateString("pl-PL"),
+        date: displayDate,
       }) +
         "\n\n" +
         t(lang, "admin_schedule_empty"),
@@ -429,8 +436,9 @@ async function showScheduleForDate(ctx, lang, date) {
   }
 
   let text = t(lang, "admin_schedule_for_date", {
-    date: new Date(date).toLocaleDateString("pl-PL"),
+    date: displayDate,
   });
+
   for (const b of list) {
     const name = b.name || b.user_name_db || "-";
     const phone = b.phone || b.user_phone_db || "-";
@@ -459,10 +467,12 @@ async function handleAdminCancelBooking(ctx, lang) {
 
 async function pickBookingToCancel(ctx, lang, date) {
   const list = getBookingsForDate(date).filter((b) => b.status === "active");
+  const displayDate = formatWarsawDate(date);
+
   if (!list.length) {
     await ctx.editMessageText(
       t(lang, "admin_cancel_no_bookings", {
-        date: new Date(date).toLocaleDateString("pl-PL"),
+        date: displayDate,
       }),
       {
         parse_mode: "HTML",
@@ -477,7 +487,7 @@ async function pickBookingToCancel(ctx, lang, date) {
   }
 
   let text = t(lang, "admin_cancel_pick_booking", {
-    date: new Date(date).toLocaleDateString("pl-PL"),
+    date: displayDate,
   });
 
   const kb = [];
@@ -511,17 +521,10 @@ async function cancelBookingById(ctx, lang, bookingId) {
     return;
   }
 
-  // 2. РАБОТАЕМ С ДАТОЙ ПРАВИЛЬНО
-  // Создаем объект даты из ISO-строки (база выдает UTC)
-  const dateObj = new Date(booking.appointment_at);
-
   // Форматируем дату и время согласно польскому часовому поясу
   // Это автоматически прибавит нужный час (+1 или +2 в зависимости от сезона)
-  const displayDate = dateObj.toLocaleDateString("pl-PL");
-  const displayTime = dateObj.toLocaleTimeString("pl-PL", {
-    hour: "2-digit",
-    minute: "2-digit",
-  });
+  const displayDate = formatWarsawDate(booking.appointment_at);
+  const displayTime = formatWarsawTime(booking.appointment_at);
 
   // 3. Отвечаем на callback (убираем "часики" на кнопке)
   await ctx.answerCallbackQuery({
@@ -562,7 +565,10 @@ async function askAdminForHours(ctx, lang) {
   const currentStart = getSetting("start_time", "10:00");
   const currentEnd = getSetting("end_time", "18:00");
 
-  const text = `🕒 Сейчас: <b>${currentStart} — ${currentEnd}</b>\n\nПришлите новое время работы в формате <code>ЧЧ:ММ-ЧЧ:ММ</code>\n\nПример: <code>09:00-20:00</code>`;
+  const text = t(lang, "admin_hours_status", {
+    start: currentStart,
+    end: currentEnd,
+  });
 
   await ctx.editMessageText(text, {
     parse_mode: "HTML",
@@ -570,7 +576,7 @@ async function askAdminForHours(ctx, lang) {
       inline_keyboard: [
         [
           {
-            text: `⬅️ ${t(lang, "admin_btn_back")}`,
+            text: t(lang, "admin_btn_back"),
             callback_data: "admin:settings",
           },
         ],
@@ -581,48 +587,48 @@ async function askAdminForHours(ctx, lang) {
 
 async function askAdminForPrices(ctx, lang) {
   ctx.session.admin = { ...ctx.session.admin, step: "enter_prices" };
-  const currentText = getSetting(
-    "custom_prices",
-    "Стандартный текст не изменен",
-  );
+  const savedPrice = getSetting("custom_prices", null);
+  const currentText = savedPrice || t(lang, "admin_prices_default");
 
-  await ctx.editMessageText(
-    `📝 <b>Редактирование цен</b>\n\nСейчас установлено:\n<code>${currentText}</code>\n\nПришлите новым сообщением текст прайс-листа (можно использовать смайлики и перенос строк).`,
-    {
-      parse_mode: "HTML",
-      reply_markup: {
-        inline_keyboard: [
-          [
-            {
-              text: `⬅️ ${t(lang, "admin_btn_back")}`,
-              callback_data: "admin:settings",
-            },
-          ],
+  const text = t(lang, "admin_edit_prices_msg", {
+    current: currentText,
+  });
+
+  await ctx.editMessageText(text, {
+    parse_mode: "HTML",
+    reply_markup: {
+      inline_keyboard: [
+        [
+          {
+            text: t(lang, "admin_btn_back"),
+            callback_data: "admin:settings",
+          },
         ],
-      },
+      ],
     },
-  );
+  });
 }
 
 async function askAdminForPortfolio(ctx, lang) {
   ctx.session.admin = { ...ctx.session.admin, step: "enter_portfolio" };
 
-  await ctx.editMessageText(
-    `🔗 <b>Редактирование портфолио</b>\n\nПришлите список ссылок в формате:\n<code>Название - Ссылка</code>\n(каждая ссылка с новой строки)\n\n<b>Пример:</b>\nInstagram - https://instagram.com/myacc\nTikTok - https://tiktok.com/@myacc`,
-    {
-      parse_mode: "HTML",
-      reply_markup: {
-        inline_keyboard: [
-          [
-            {
-              text: `⬅️ ${t(lang, "admin_btn_back")}`,
-              callback_data: "admin:settings",
-            },
-          ],
+  const text = t(lang, "admin_portfolio_msg", {
+    current: currentText,
+  });
+
+  await ctx.editMessageText(text, {
+    parse_mode: "HTML",
+    reply_markup: {
+      inline_keyboard: [
+        [
+          {
+            text: t(lang, "admin_btn_back"),
+            callback_data: "admin:settings",
+          },
         ],
-      },
+      ],
     },
-  );
+  });
 }
 
 async function askAdminForBroadcast(ctx, lang) {

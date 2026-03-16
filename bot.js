@@ -474,7 +474,6 @@ bot.on("message:text", async (ctx) => {
   const lang = getLang(ctx);
   const userId = ctx.from.id;
 
-  // 1. ПРОВЕРКА АДМИН-ДЕЙСТВИЙ (Только если отправитель — ADMIN_ID)
   if (String(userId) === String(ADMIN_ID) && ctx.session.admin?.step) {
     const adminStep = ctx.session.admin.step;
 
@@ -482,9 +481,7 @@ bot.on("message:text", async (ctx) => {
     if (adminStep === "enter_prices") {
       setSetting("custom_prices", ctx.message.text);
       ctx.session.admin.step = null;
-      return ctx.reply("✅ Прайс-лист успешно обновлен!", {
-        parse_mode: "HTML",
-      });
+      return ctx.reply(t(lang, "admin_prices_updated"), { parse_mode: "HTML" });
     }
 
     // --- РЕДАКТИРОВАНИЕ ПОРТФОЛИО ---
@@ -498,22 +495,18 @@ bot.on("message:text", async (ctx) => {
         if (parts.length >= 2) {
           const name = parts[0].trim();
           const url = parts.slice(1).join("-").trim();
-          if (url.startsWith("http")) {
-            links.push({ name, url });
-          }
+          if (url.startsWith("http")) links.push({ name, url });
         }
       }
 
       if (links.length === 0) {
-        return ctx.reply(
-          "❌ Не удалось распознать ссылки. Формат: Название - Ссылка",
-        );
+        return ctx.reply(t(lang, "admin_portfolio_error"));
       }
 
       setSetting("portfolio_links", links);
       ctx.session.admin.step = null;
       return ctx.reply(
-        `✅ Портфолио обновлено! Добавлено кнопок: ${links.length}`,
+        t(lang, "admin_portfolio_updated", { count: links.length }),
       );
     }
 
@@ -525,9 +518,7 @@ bot.on("message:text", async (ctx) => {
       );
 
       if (!match) {
-        return ctx.reply(
-          "❌ Неверный формат. Используйте ЧЧ:ММ-ЧЧ:ММ (напр. 09:00-18:00)",
-        );
+        return ctx.reply(t(lang, "admin_hours_error"));
       }
 
       const startTime = `${match[1]}:${match[2]}`;
@@ -536,30 +527,22 @@ bot.on("message:text", async (ctx) => {
       setSetting("start_time", startTime);
       setSetting("end_time", endTime);
       ctx.session.admin.step = null;
-
       autoGenerateSlots();
+
       return ctx.reply(
-        `✅ Время работы изменено на: <b>${startTime} — ${endTime}</b>`,
+        t(lang, "admin_hours_updated", { start: startTime, end: endTime }),
         { parse_mode: "HTML" },
       );
-    }
-
-    // --- ДОБАВЛЕНИЕ ОДИНОЧНОГО СЛОТА ---
-    if (adminStep === "enter_time") {
-      await handleAdminTimeInput(ctx, lang);
-      return;
     }
 
     // --- МАССОВАЯ РАССЫЛКА ---
     if (adminStep === "enter_broadcast") {
       const messageText = ctx.message.text;
-
-      // Получаем всех пользователей из БД
       const users = db.prepare("SELECT telegram_id FROM users").all();
-
       ctx.session.admin.step = null;
+
       await ctx.reply(
-        `🚀 Начинаю рассылку на ${users.length} пользователей...`,
+        t(lang, "admin_broadcast_start", { count: users.length }),
       );
 
       let successCount = 0;
@@ -569,45 +552,47 @@ bot.on("message:text", async (ctx) => {
         try {
           await ctx.api.sendMessage(
             user.telegram_id,
-            `🔔 <b>У мастера новости!</b>\n\n${messageText}`,
+            `${t(lang, "broadcast_header")}\n\n${messageText}`,
             {
               parse_mode: "HTML",
               reply_markup: {
                 inline_keyboard: [
-                  [{ text: "📅 Записаться", callback_data: "menu:book" }],
+                  [
+                    {
+                      text: t(lang, "btn_book_now"),
+                      callback_data: "menu:book",
+                    },
+                  ],
                 ],
               },
             },
           );
           successCount++;
-
-          // ПАУЗА: ждем 50 миллисекунд перед следующим сообщением (примерно 20 чел/сек)
           await new Promise((resolve) => setTimeout(resolve, 150));
         } catch (e) {
           failCount++;
         }
       }
 
-      await ctx.reply(
-        `✅ Рассылка завершена!\nДоставлено: ${successCount}\nНе удалось: ${failCount}`,
+      return ctx.reply(
+        t(lang, "admin_broadcast_done", {
+          success: successCount,
+          fail: failCount,
+        }),
       );
+    }
+
+    // --- ОСТАЛЬНЫЕ ШАГИ ---
+    if (adminStep === "enter_time") {
+      await handleAdminTimeInput(ctx, lang);
       return;
     }
   }
 
-  // 2. ПРОВЕРКА ПОЛЬЗОВАТЕЛЬСКОЙ ЗАПИСИ (FSM)
+  // 2. ПРОВЕРКА ПОЛЬЗОВАТЕЛЬСКОЙ ЗАПИСИ
   const bookingStep = ctx.session.booking?.step;
-
-  if (bookingStep === "enter_name") {
-    await handleNameInput(ctx, lang);
-    return;
-  }
-
-  if (bookingStep === "enter_phone") {
-    // Используем деструктуризацию, чтобы не было конфликтов с импортами
-    await handlePhoneInput(ctx, lang);
-    return;
-  }
+  if (bookingStep === "enter_name") return handleNameInput(ctx, lang);
+  if (bookingStep === "enter_phone") return handlePhoneInput(ctx, lang);
 });
 
 bot.callbackQuery("admin:main", async (ctx) => {
