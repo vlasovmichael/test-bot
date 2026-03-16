@@ -1,0 +1,25 @@
+{
+  "name": "beauty-bot",
+  "version": "1.0.0",
+  "description": "Telegram booking bot for a nail artist in Poland (grammY + SQLite).",
+  "main": "bot.js",
+  "scripts": {
+    "start": "node bot.js"
+  },
+  "keywords": [
+    "telegram",
+    "bot",
+    "grammy",
+    "sqlite",
+    "nail",
+    "booking"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "better-sqlite3": "^11.8.1",
+    "dotenv": "^16.4.5",
+    "grammy": "^1.34.0",
+    "node-cron": "^3.0.3"
+  }
+}
