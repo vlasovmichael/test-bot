@@ -1,3 +1,5 @@
+export const CURRENT_DB_VERSION = 1;
+
 export const tenantSchema = `
 CREATE TABLE IF NOT EXISTS categories (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -25,8 +27,8 @@ CREATE TABLE IF NOT EXISTS users (
 
 CREATE TABLE IF NOT EXISTS slots (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
-  date TEXT NOT NULL,
-  time TEXT NOT NULL,
+  date TEXT NOT NULL,           -- YYYY-MM-DD
+  time TEXT NOT NULL,           -- HH:MM
   is_booked INTEGER DEFAULT 0,
   is_active INTEGER DEFAULT 1
 );
@@ -59,9 +61,12 @@ CREATE TABLE IF NOT EXISTS settings (
 );
 
 CREATE TABLE IF NOT EXISTS google_auth (
-  key TEXT PRIMARY KEY, -- single row 'default'
+  key TEXT PRIMARY KEY,
   access_token TEXT,
   refresh_token TEXT,
   expiry_date INTEGER
 );
+
+-- Initialize version if not exists
+INSERT OR IGNORE INTO settings (key, value) VALUES ('db_version', '${CURRENT_DB_VERSION}');
 `;
