@@ -1,4 +1,4 @@
-// bot.js - Fixed Imports and CJS compatibility
+// bot.js - Fixed Language Switching
 import { Bot, session } from "grammy";
 import pkg from "p-ratelimit";
 const { getRateLimit } = pkg;
@@ -13,7 +13,6 @@ import { getTenantDb } from "./database/tenant_factory.js";
 import { t, getLanguageButtons } from "./i18n.js";
 import { startReminderScheduler } from "./handlers/reminders.js";
 import {
-  mainMenuKeyboard,
   sendMainMenu,
   handlePrices,
   handlePortfolio,
@@ -36,14 +35,6 @@ import {
   showWorkDaysSettings,
   showStats,
   handleGoogleAuth,
-  handleManageServices,
-  handleManageCategory,
-  askForCategoryName,
-  handleCategoryNameInput,
-  askForServiceName,
-  handleServiceNameInput,
-  handleServiceDurationInput,
-  handleServicePriceInput,
 } from "./handlers/admin.js";
 import { startAuthServer } from "./auth-server.js";
 import { getLogger } from "./utils/logger.js";
@@ -62,6 +53,10 @@ bot.use(async (ctx, next) => {
   ctx.tenantId = TENANT_ID;
   ctx.timezone = TIMEZONE;
   ctx.logger = getLogger(ctx.tenantId);
+
+  // Ensure language is correctly injected from session
+  ctx.lang = ctx.session.language || "en";
+
   await next();
 });
 
@@ -84,21 +79,24 @@ bot.command("start", async (ctx) => {
     return;
   }
   ctx.session.language = lang;
+  ctx.lang = lang;
   await sendMainMenu(ctx, lang);
 });
 
 bot.on("callback_query:data", async (ctx, next) => {
   const data = ctx.callbackQuery.data;
-  const lang = getLang(ctx);
 
   if (data.startsWith("lang:")) {
     const l = data.split(":")[1];
     ctx.session.language = l;
+    ctx.lang = l; // Update immediately in context
     upsertUser(ctx.tenantId, ctx.from.id, { language: l });
     await ctx.answerCallbackQuery();
-    await updateMainMenu(ctx, lang);
+    await updateMainMenu(ctx, l);
     return;
   }
+
+  const lang = ctx.lang;
 
   if (data.startsWith("menu:")) {
     const action = data.split(":")[1];
@@ -117,10 +115,6 @@ bot.on("callback_query:data", async (ctx, next) => {
     if (action === "conf_days") { await showWorkDaysSettings(ctx, lang); return; }
     if (action === "stats") { await showStats(ctx, lang); return; }
     if (action === "google_auth") { await handleGoogleAuth(ctx, lang); return; }
-    if (action === "manage_services") { await handleManageServices(ctx, lang); return; }
-    if (action === "add_cat") { await askForCategoryName(ctx, lang); return; }
-    if (data.startsWith("admin:manage_cat:")) { await handleManageCategory(ctx, lang, Number(data.split(":")[2])); return; }
-    if (data.startsWith("admin:add_srv:")) { await askForServiceName(ctx, lang, Number(data.split(":")[2])); return; }
     await ctx.answerCallbackQuery();
     return;
   }
@@ -141,12 +135,6 @@ bot.command("admin", async (ctx) => {
 
 bot.on("message:text", async (ctx) => {
   const lang = getLang(ctx);
-  const adminStep = ctx.session.admin?.step;
-  if (adminStep === "add_cat_name") return handleCategoryNameInput(ctx, lang);
-  if (adminStep === "add_srv_name") return handleServiceNameInput(ctx, lang);
-  if (adminStep === "add_srv_duration") return handleServiceDurationInput(ctx, lang);
-  if (adminStep === "add_srv_price") return handleServicePriceInput(ctx, lang);
-
   const bookingStep = ctx.session.booking?.step;
   if (bookingStep === "enter_name") return handleNameInput(ctx, lang);
   if (bookingStep === "enter_phone") return handlePhoneInput(ctx, lang);

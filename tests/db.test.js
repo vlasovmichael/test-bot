@@ -4,6 +4,7 @@ import { tenantSchema } from "../database/schema.js";
 import { getAvailableSlotsForDate, getCategories, setSetting, autoGenerateSlots } from "../database/db.js";
 import Database from "better-sqlite3";
 import fs from "fs";
+import { DateTime } from "luxon";
 
 describe("Database Multi-tenancy", () => {
   const t1 = "tenant_db1";
@@ -28,13 +29,19 @@ describe("Database Multi-tenancy", () => {
   });
 
   it("should generate slots correctly for a tenant", () => {
-    setSetting(t1, "work_days", [1, 2, 3, 4, 5]);
+    const today = DateTime.now().setZone("Europe/Warsaw");
+    const workDay = today.plus({ days: 1 }).weekday; // Get a day in the future
+
+    setSetting(t1, "work_days", [workDay]);
     setSetting(t1, "start_time", "09:00");
     setSetting(t1, "end_time", "11:00");
     setSetting(t1, "step_min", 60);
+    setSetting(t1, "timezone", "Europe/Warsaw");
 
     autoGenerateSlots(t1);
-    const slots = getAvailableSlotsForDate(t1, new Date().toISOString().split("T")[0]);
+
+    const targetDate = today.plus({ days: 1 }).toISODate();
+    const slots = getAvailableSlotsForDate(t1, targetDate);
     expect(slots.length).toBeGreaterThan(0);
   });
 });

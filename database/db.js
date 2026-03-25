@@ -1,4 +1,5 @@
 import { getTenantDb } from "./tenant_factory.js";
+import { generateSlots } from "../services/slot_generator.js";
 
 function getSetting(tenantId, key, defaultValue) {
   const db = getTenantDb(tenantId);
@@ -91,26 +92,25 @@ function getBookingsForDate(tenantId, date) {
 
 function autoGenerateSlots(tenantId) {
   const db = getTenantDb(tenantId);
-  const workDays = getSetting(tenantId, "work_days", [1, 2, 3, 4, 5]);
-  const startHour = getSetting(tenantId, "start_time", "10:00");
-  const endHour = getSetting(tenantId, "end_time", "18:00");
-  const step = getSetting(tenantId, "step_min", 60);
+  const config = {
+    work_days: getSetting(tenantId, "work_days", [1, 2, 3, 4, 5]),
+    start_time: getSetting(tenantId, "start_time", "10:00"),
+    end_time: getSetting(tenantId, "end_time", "18:00"),
+    step_min: getSetting(tenantId, "step_min", 60),
+    timezone: getSetting(tenantId, "timezone", "Europe/Warsaw")
+  };
+
+  const slots = generateSlots(config);
+
   const today = new Date().toISOString().split("T")[0];
   db.prepare("DELETE FROM slots WHERE date >= ? AND is_booked = 0 AND id NOT IN (SELECT slot_id FROM bookings)").run(today);
+
   const insert = db.prepare("INSERT INTO slots (date, time, is_booked, is_active) VALUES (?, ?, 0, 1)");
   const checkExists = db.prepare("SELECT id FROM slots WHERE date = ? AND time = ? LIMIT 1");
-  for (let i = 0; i < 30; i++) {
-    const d = new Date(); d.setDate(d.getDate() + i);
-    const dateStr = d.toISOString().split("T")[0];
-    const weekday = d.getDay() === 0 ? 7 : d.getDay();
-    if (workDays.includes(weekday)) {
-      let current = new Date(`${dateStr}T${startHour}:00`);
-      const end = new Date(`${dateStr}T${endHour}:00`);
-      while (current < end) {
-        const timeStr = current.toTimeString().slice(0, 5);
-        if (!checkExists.get(dateStr, timeStr)) insert.run(dateStr, timeStr);
-        current.setMinutes(current.getMinutes() + step);
-      }
+
+  for (const s of slots) {
+    if (!checkExists.get(s.date, s.time)) {
+      insert.run(s.date, s.time);
     }
   }
 }
