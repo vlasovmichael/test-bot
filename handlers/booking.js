@@ -1,18 +1,23 @@
 import {
-  getAvailableDatesWithin,
   getAvailableSlotsForDate,
-  getActiveBookingByUser,
-  getAllActiveBookingsByUser,
-  createBooking,
   getSlotById,
+  createBooking,
+  getCategories,
+  getServicesByCategory,
+  getServiceById,
   getSetting,
 } from "../database/db.js";
-import { monthsGenitive, monthsNominative } from "./months.js";
 import { t } from "../i18n.js";
-import { ADMIN_ID, SCHEDULE_CHANNEL_ID } from "../config.js";
+import { DateTime } from "luxon";
+import { createCalendarEvent } from "../utils/google-calendar.js";
 import { sendMainMenu } from "./mainMenu.js";
+import { monthsNominative, monthsGenitive } from "./months.js";
+import { TIMEZONE } from "../config.js";
 
-// Вспомогательные функции
+function buildInlineKeyboard(rows) {
+  return { inline_keyboard: rows };
+}
+
 function toDateString(date) {
   const year = date.getFullYear();
   const month = String(date.getMonth() + 1).padStart(2, "0");
@@ -20,72 +25,74 @@ function toDateString(date) {
   return `${year}-${month}-${day}`;
 }
 
-function parseLocalDate(dateStr) {
-  const [y, m, d] = dateStr.split("-").map(Number);
-  return new Date(y, m - 1, d);
+async function startBooking(ctx, lang) {
+  const categories = getCategories(ctx.tenantId);
+  if (!categories.length) {
+    return ctx.reply(t(lang, "no_categories_available"));
+  }
+
+  const rows = categories.map((cat) => [{ text: cat.name, callback_data: `book_cat:${cat.id}` }]);
+  await ctx.reply(t(lang, "booking_choose_category"), { reply_markup: buildInlineKeyboard(rows) });
 }
 
-/**
- * Календарь с переводами дней недели
- */
-function buildUserCalendar(lang, actionPrefix, monthOffset = 0) {
-  const now = new Date();
-  const viewDate = new Date(now.getFullYear(), now.getMonth() + monthOffset, 1);
-  const currentMonth = viewDate.getMonth();
-  const currentYear = viewDate.getFullYear();
+async function handleCategorySelect(ctx, lang, catId) {
+  const services = getServicesByCategory(ctx.tenantId, catId);
+  if (!services.length) {
+    return ctx.reply(t(lang, "no_services_available"));
+  }
 
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
+  const rows = services.map((srv) => [
+    { text: `${srv.name} (${srv.price} PLN)`, callback_data: `book_srv:${srv.id}` },
+  ]);
+  await ctx.editMessageText(t(lang, "booking_choose_service"), {
+    reply_markup: buildInlineKeyboard(rows),
+  });
+}
 
-  // 1. ПОЛУЧАЕМ РАБОЧИЕ ДНИ ИЗ НАСТРОЕК (дефолт Пн-Пт)
-  const workDays = getSetting("work_days", [1, 2, 3, 4, 5]);
+async function handleServiceSelect(ctx, lang, srvId) {
+  ctx.session.booking = { serviceId: srvId };
+  await ctx.editMessageText(t(lang, "booking_choose_date"), {
+    reply_markup: buildUserCalendar(ctx.tenantId, lang, "book_date", 0, ctx.timezone),
+  });
+}
 
+function buildUserCalendar(tenantId, lang, actionPrefix, monthOffset = 0, timezone = TIMEZONE) {
+  const now = DateTime.now().setZone(timezone);
+  const viewDate = now.plus({ months: monthOffset }).startOf('month');
+  const currentMonth = viewDate.month;
+  const currentYear = viewDate.year;
+
+  const workDays = getSetting(tenantId, "work_days", [1, 2, 3, 4, 5]);
   const weekDays = t(lang, "week_days");
-  const emptyChar = "⠀";
   const monthList = monthsNominative[lang] || monthsNominative["en"];
-  const headerText = `─── ${monthList[currentMonth]} ${currentYear} ───`;
+  const headerText = `─── ${monthList[currentMonth - 1]} ${currentYear} ───`;
 
   const keyboard = [
     [{ text: headerText, callback_data: "none" }],
     weekDays.map((day) => ({ text: day, callback_data: "none" })),
   ];
 
-  let startDay = viewDate.getDay();
-  startDay = startDay === 0 ? 6 : startDay - 1;
+  let emptyCells = viewDate.weekday - 1;
 
   let row = [];
-  for (let i = 0; i < startDay; i++) {
-    row.push({ text: emptyChar, callback_data: "none" });
+  for (let i = 0; i < emptyCells; i++) {
+    row.push({ text: " ", callback_data: "none" });
   }
 
-  const daysInMonth = new Date(currentYear, currentMonth + 1, 0).getDate();
+  const daysInMonth = viewDate.daysInMonth;
 
   for (let day = 1; day <= daysInMonth; day++) {
-    const d = new Date(currentYear, currentMonth, day);
-    const iso = toDateString(d);
-    const checkDate = new Date(d).setHours(0, 0, 0, 0);
-
-    // ОПРЕДЕЛЯЕМ НОМЕР ДНЯ НЕДЕЛИ (0-Вс, 1-Пн...)
-    const dayOfWeek = d.getDay();
-
-    const isPast = checkDate < today.getTime();
-    const isToday = checkDate === today.getTime();
-
-    // 2. ПРОВЕРЯЕМ, РАБОЧИЙ ЛИ ЭТО ДЕНЬ
-    const isWorkDay = workDays.includes(dayOfWeek);
+    const d = viewDate.set({ day });
+    const iso = d.toISODate();
+    const isPast = d.startOf('day') < now.startOf('day');
+    const isWorkDay = workDays.includes(d.weekday);
 
     let text = String(day);
     let callback_data = `${actionPrefix}:${iso}`;
 
-    if (isPast) {
-      text = "·";
+    if (isPast || !isWorkDay) {
+      text = isPast ? "·" : "▫️";
       callback_data = "none";
-    } else if (!isWorkDay) {
-      // 3. ЕСЛИ ДЕНЬ НЕ РАБОЧИЙ - ЗАМЕНЯЕМ ТЕКСТ И ВЫКЛЮЧАЕМ КНОПКУ
-      text = "▫️"; // Или "✖️", или просто пусто
-      callback_data = "none";
-    } else if (isToday) {
-      text = `📍${day}`;
     }
 
     row.push({ text, callback_data });
@@ -96,234 +103,65 @@ function buildUserCalendar(lang, actionPrefix, monthOffset = 0) {
   }
 
   if (row.length > 0) {
-    while (row.length < 7) row.push({ text: emptyChar, callback_data: "none" });
+    while (row.length < 7) row.push({ text: " ", callback_data: "none" });
     keyboard.push(row);
   }
 
-  // --- НАВИГАЦИЯ МЕЖДУ МЕСЯЦАМИ ---
-  const navRow = [];
-  if (monthOffset > 0) {
-    navRow.push({ text: "⬅️", callback_data: `cal_offset:${monthOffset - 1}` });
-  } else {
-    navRow.push({ text: " ", callback_data: "none" }); // Для симметрии
-  }
-
-  // Кнопка "Вперед" (разрешаем смотреть на 1 месяц вперед)
-  if (monthOffset < 1) {
-    navRow.push({ text: "➡️", callback_data: `cal_offset:${monthOffset + 1}` });
-  } else {
-    navRow.push({ text: " ", callback_data: "none" });
-  }
+  const navRow = [
+    { text: monthOffset > 0 ? "⬅️" : " ", callback_data: monthOffset > 0 ? `cal_offset:${monthOffset - 1}` : "none" },
+    { text: monthOffset < 1 ? "➡️" : " ", callback_data: monthOffset < 1 ? `cal_offset:${monthOffset + 1}` : "none" }
+  ];
   keyboard.push(navRow);
+  keyboard.push([{ text: `⬅️ ${t(lang, "btn_back_main")}`, callback_data: "menu:back" }]);
 
-  keyboard.push([
-    { text: `⬅️ ${t(lang, "btn_back_main")}`, callback_data: "menu:back" },
-  ]);
   return { inline_keyboard: keyboard };
 }
 
-function buildTimesKeyboard(lang, date, slots) {
-  const rows = slots.map((s) => [
-    { text: s.time, callback_data: `book_time:${s.id}` },
-  ]);
-  rows.push([
-    { text: `⬅️ ${t(lang, "btn_back_main")}`, callback_data: "menu:back" },
-  ]);
-  return { inline_keyboard: rows };
-}
-
-/**
- * Логика процессов
- */
-// handlers/booking.js
-
-async function startBooking(ctx, lang) {
-  const userId = String(ctx.from.id);
-  const activeBookings = getAllActiveBookingsByUser(userId);
-
-  if (activeBookings && activeBookings.length >= 2) {
-    await ctx.answerCallbackQuery();
-
-    // Формируем список. Слово "at" или "в" можно вынести в переводы,
-    // но обычно "Дата — Время" понятно всем.
-    const list = activeBookings
-      .map((b) => `• ${b.date} — ${b.time}`)
-      .join("\n");
-
-    return ctx.reply(t(lang, "booking_limit_reached", { list: list }), {
-      parse_mode: "HTML",
-    });
-  }
-
-  await ctx.answerCallbackQuery();
-  await ctx.reply(t(lang, "booking_start_title"), {
-    parse_mode: "HTML",
-    reply_markup: buildUserCalendar(lang, "book_date", 0),
-  });
-}
-
 async function handleDateSelect(ctx, lang, date) {
-  const slots = getAvailableSlotsForDate(date);
-  await ctx.answerCallbackQuery();
+  const slots = getAvailableSlotsForDate(ctx.tenantId, date);
+  if (!slots.length) return ctx.reply(t(lang, "no_available_times"));
 
-  if (!slots.length) {
-    return ctx.reply(t(lang, "no_available_times"), { parse_mode: "HTML" });
-  }
-
-  // 1. Парсим ISO дату (YYYY-MM-DD)
-  const [year, month, day] = date.split("-").map(Number);
-  const dateObj = new Date(year, month - 1, day);
-
-  // 2. Получаем индекс месяца (0-11)
-  const monthIdx = dateObj.getMonth();
-
-  // 3. Формируем красивую дату на нужном языке
-  // Если языка нет в словаре, берем английский
-  const monthList = monthsGenitive[lang] || monthsGenitive["en"];
-  const monthName = monthList[monthIdx];
-
-  const dateStr = `${day} ${monthName}`;
-
-  await ctx.editMessageText(t(lang, "booking_choose_time", { date: dateStr }), {
-    parse_mode: "HTML",
-    reply_markup: buildTimesKeyboard(lang, date, slots),
-  });
+  const rows = slots.map((s) => [{ text: s.time, callback_data: `book_time:${s.id}` }]);
+  await ctx.editMessageText(t(lang, "booking_choose_time", { date }), { reply_markup: buildInlineKeyboard(rows) });
 }
 
 async function handleTimeSelect(ctx, lang, slotId) {
-  const slot = getSlotById(slotId);
-  await ctx.answerCallbackQuery();
+  const slot = getSlotById(ctx.tenantId, slotId);
   if (!slot) return ctx.reply(t(lang, "booking_slot_unavailable"));
-
-  ctx.session.booking = { step: "enter_name", slotId: slot.id };
-  await ctx.reply(t(lang, "booking_enter_name"), { parse_mode: "HTML" });
+  ctx.session.booking.slotId = slot.id;
+  ctx.session.booking.step = "enter_name";
+  await ctx.reply(t(lang, "booking_enter_name"));
 }
 
 async function handleNameInput(ctx, lang) {
-  const name = ctx.message.text.trim();
-  if (name.length < 2) return ctx.reply(t(lang, "error_invalid_name"));
-
-  ctx.session.booking.name = name;
+  ctx.session.booking.name = ctx.message.text.trim();
   ctx.session.booking.step = "enter_phone";
-  await ctx.reply(t(lang, "booking_enter_phone"), { parse_mode: "HTML" });
+  await ctx.reply(t(lang, "booking_enter_phone"));
 }
 
 async function handlePhoneInput(ctx, lang) {
-  const phone = ctx.message.text.trim();
-  const phoneRegex = /^\+?[\d\s-]{7,15}$/;
-  if (!phoneRegex.test(phone)) return ctx.reply(t(lang, "error_invalid_phone"));
-
+  ctx.session.booking.phone = ctx.message.text.trim();
   const session = ctx.session.booking;
-  session.phone = phone;
-  session.step = "confirm_data"; // Новый шаг
-
-  const slot = getSlotById(session.slotId);
-  const dateStr = parseLocalDate(slot.date).toLocaleDateString(lang);
-
-  const text = t(lang, "confirm_booking_title", {
-    date: dateStr,
-    time: slot.time,
-    name: session.name,
-    phone: session.phone,
-  });
-
-  const keyboard = {
-    inline_keyboard: [
-      [
-        {
-          text: t(lang, "btn_confirm_yes"),
-          callback_data: "book_confirm:yes",
-        },
-      ],
-      [{ text: t(lang, "btn_confirm_no"), callback_data: "book_confirm:no" }],
-    ],
-  };
-
-  await ctx.reply(text, { parse_mode: "HTML", reply_markup: keyboard });
+  const slot = getSlotById(ctx.tenantId, session.slotId);
+  const service = getServiceById(ctx.tenantId, session.serviceId);
+  const text = t(lang, "confirm_booking_title", { date: slot.date, time: slot.time, name: session.name, phone: session.phone, service: service.name });
+  const keyboard = buildInlineKeyboard([[{ text: t(lang, "btn_confirm_yes"), callback_data: "book_confirm:yes" }], [{ text: t(lang, "btn_confirm_no"), callback_data: "book_confirm:no" }]]);
+  await ctx.reply(text, { reply_markup: keyboard });
 }
 
 async function handleFinalConfirm(ctx, lang, answer) {
-  await ctx.answerCallbackQuery();
+  if (answer === "no") { ctx.session.booking = null; return sendMainMenu(ctx, lang); }
   const session = ctx.session.booking;
-
-  if (answer === "no") {
-    ctx.session.booking = null;
-    return sendMainMenu(ctx, lang);
-  }
-
-  const slot = getSlotById(session.slotId);
-  if (!slot || slot.is_booked) {
-    return ctx.editMessageText(t(lang, "booking_slot_unavailable"));
-  }
-
-  const [year, month, day] = slot.date.split("-").map(Number);
-  const monthList = monthsGenitive[lang] || monthsGenitive["en"];
-  const displayDate = `${day} ${monthList[month - 1]}`;
-
+  const slot = getSlotById(ctx.tenantId, session.slotId);
+  const service = getServiceById(ctx.tenantId, session.serviceId);
   try {
-    // 1. ВЫЧИСЛЯЕМ ВРЕМЯ НАПОМИНАНИЯ (например, за 24 часа до визита)
-    const appointmentDate = new Date(`${slot.date}T${slot.time}:00`);
-    const reminderDate = new Date(appointmentDate.getTime());
-
-    // Для работы: за 24 часа до визита
-    reminderDate.setHours(reminderDate.getHours() - 24);
-
-    // 2. ДОБАВЛЯЕМ await и передаем reminderAt
-    await createBooking({
-      slotId: slot.id,
-      userTelegramId: ctx.from.id,
-      name: session.name,
-      phone: session.phone,
-      appointmentAt: appointmentDate.toISOString(),
-      reminderAt: reminderDate.toISOString(),
-    });
-
-    const successText = t(lang, "booking_confirmed_success", {
-      date: displayDate,
-      time: slot.time,
-      name: session.name,
-      phone: session.phone,
-    });
-
-    await ctx.editMessageText(successText, { parse_mode: "HTML" });
-
-    // Уведомление админу
-    const adminMsg = t(lang, "admin_notification_new", {
-      name: session.name,
-      date: displayDate,
-      time: slot.time,
-      phone: session.phone,
-    });
-
-    // Лучше отправлять меню ПОСЛЕ подтверждения,
-    // чтобы не перекрывать сообщение об успехе сразу
+    const appointmentAt = DateTime.fromISO(`${slot.date}T${slot.time}`, { zone: ctx.timezone });
+    const reminderAt = appointmentAt.minus({ hours: 24 });
+    const bookingId = createBooking({ tenantId: ctx.tenantId, slotId: slot.id, serviceId: service.id, userTelegramId: ctx.from.id, name: session.name, phone: session.phone, appointmentAt: appointmentAt.toISO(), reminderAt: reminderAt.toISO() });
+    await createCalendarEvent(ctx.tenantId, { id: bookingId, ...session, appointment_at: appointmentAt.toISO() }, service);
+    await ctx.editMessageText(t(lang, "booking_confirmed_success"));
     await sendMainMenu(ctx, lang);
-
-    if (ADMIN_ID) {
-      await ctx.api
-        .sendMessage(ADMIN_ID, adminMsg, { parse_mode: "HTML" })
-        .catch((e) => console.error("Admin notify error", e));
-    }
-
-    if (SCHEDULE_CHANNEL_ID) {
-      await ctx.api
-        .sendMessage(SCHEDULE_CHANNEL_ID, adminMsg, { parse_mode: "HTML" })
-        .catch((e) => console.error("Channel notify error", e));
-    }
-  } catch (e) {
-    console.error("Критическая ошибка при создании брони:", e);
-    await ctx.reply(t(lang, "error_generic"));
-  } finally {
-    ctx.session.booking = null;
-  }
+  } catch (e) { console.error(e); await ctx.reply(t(lang, "error_generic")); } finally { ctx.session.booking = null; }
 }
 
-export {
-  startBooking,
-  handleDateSelect,
-  handleTimeSelect,
-  handleNameInput,
-  handlePhoneInput,
-  handleFinalConfirm,
-  buildUserCalendar,
-};
+export { startBooking, handleCategorySelect, handleServiceSelect, handleDateSelect, handleTimeSelect, handleNameInput, handlePhoneInput, handleFinalConfirm, buildUserCalendar };
