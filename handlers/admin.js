@@ -1,5 +1,4 @@
 import {
-  db,
   getSetting,
   setSetting,
   getCategories,
@@ -13,9 +12,9 @@ import {
   getBookingsForDate,
   cancelBooking,
 } from "../database/db.js";
+import { getTenantDb } from "../database/tenant_factory.js";
 import { t } from "../i18n.js";
 import { getAuthUrl } from "../utils/google-calendar.js";
-import { monthsNominative } from "./months.js";
 
 function buildInlineKeyboard(rows) {
   return { inline_keyboard: rows };
@@ -102,7 +101,7 @@ async function askForCategoryName(ctx, lang) {
 async function handleCategoryNameInput(ctx, lang) {
   const name = ctx.message.text.trim();
   if (!name) return ctx.reply(t(lang, "error_invalid_name"));
-  db.prepare("INSERT INTO categories (tenant_id, name) VALUES (?, ?)").run(ctx.tenantId, name);
+  getTenantDb(ctx.tenantId).prepare("INSERT INTO categories (name) VALUES (?)").run(name);
   ctx.session.admin = null;
   await ctx.reply(t(lang, "admin_category_added"), { reply_markup: buildAdminMainKeyboard(lang) });
 }
@@ -130,7 +129,7 @@ async function handleServicePriceInput(ctx, lang) {
   const price = parseFloat(ctx.message.text.trim().replace(",", "."));
   if (isNaN(price) || price < 0) return ctx.reply(t(lang, "error_invalid_price"));
   const { catId, name, duration } = ctx.session.admin;
-  db.prepare("INSERT INTO services (tenant_id, category_id, name, duration_min, price) VALUES (?, ?, ?, ?, ?)").run(ctx.tenantId, catId, name, duration, price);
+  getTenantDb(ctx.tenantId).prepare("INSERT INTO services (category_id, name, duration_min, price) VALUES (?, ?, ?, ?)").run(catId, name, duration, price);
   ctx.session.admin = null;
   await ctx.reply(t(lang, "admin_service_added"), { reply_markup: buildAdminMainKeyboard(lang) });
 }

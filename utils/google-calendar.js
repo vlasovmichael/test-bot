@@ -1,6 +1,6 @@
 import { google } from "googleapis";
 import { GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, GOOGLE_REDIRECT_URI } from "../config.js";
-import { db } from "../database/db.js";
+import { getTenantDb } from "../database/tenant_factory.js";
 
 const oauth2Client = new google.auth.OAuth2(
   GOOGLE_CLIENT_ID,
@@ -18,13 +18,15 @@ export function getAuthUrl(tenantId) {
 
 export async function saveTokens(tenantId, code) {
   const { tokens } = await oauth2Client.getToken(code);
+  const db = getTenantDb(tenantId);
   db.prepare(
-    "INSERT OR REPLACE INTO google_auth (tenant_id, access_token, refresh_token, expiry_date) VALUES (?, ?, ?, ?)"
-  ).run(tenantId, tokens.access_token, tokens.refresh_token, tokens.expiry_date);
+    "INSERT OR REPLACE INTO google_auth (key, access_token, refresh_token, expiry_date) VALUES ('default', ?, ?, ?)"
+  ).run(tokens.access_token, tokens.refresh_token, tokens.expiry_date);
 }
 
 async function getAuthenticatedClient(tenantId) {
-  const auth = db.prepare("SELECT * FROM google_auth WHERE tenant_id = ?").get(tenantId);
+  const db = getTenantDb(tenantId);
+  const auth = db.prepare("SELECT * FROM google_auth WHERE key = 'default'").get();
   if (!auth) return null;
 
   const client = new google.auth.OAuth2(GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, GOOGLE_REDIRECT_URI);
@@ -35,20 +37,8 @@ async function getAuthenticatedClient(tenantId) {
   });
 
   client.on("tokens", (tokens) => {
-    if (tokens.refresh_token) {
-      db.prepare("UPDATE google_auth SET access_token = ?, refresh_token = ?, expiry_date = ? WHERE tenant_id = ?").run(
-        tokens.access_token,
-        tokens.refresh_token,
-        tokens.expiry_date,
-        tenantId
-      );
-    } else {
-      db.prepare("UPDATE google_auth SET access_token = ?, expiry_date = ? WHERE tenant_id = ?").run(
-        tokens.access_token,
-        tokens.expiry_date,
-        tenantId
-      );
-    }
+    const update = db.prepare("UPDATE google_auth SET access_token = ?, refresh_token = COALESCE(?, refresh_token), expiry_date = ? WHERE key = 'default'");
+    update.run(tokens.access_token, tokens.refresh_token, tokens.expiry_date);
   });
 
   return client;
@@ -74,6 +64,7 @@ export async function createCalendarEvent(tenantId, booking, service) {
     resource: event,
   });
 
+  const db = getTenantDb(tenantId);
   db.prepare("UPDATE bookings SET google_event_id = ? WHERE id = ?").run(res.data.id, booking.id);
   return res.data.id;
 }

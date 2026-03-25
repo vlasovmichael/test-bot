@@ -1,14 +1,15 @@
-// bot.js - Updated with Admin FSM
+// bot.js - Fixed Imports and CJS compatibility
 import { Bot, session } from "grammy";
-import { getRateLimit } from "p-ratelimit";
+import pkg from "p-ratelimit";
+const { getRateLimit } = pkg;
 import { BOT_TOKEN, ADMIN_ID, TENANT_ID, TIMEZONE } from "./config.js";
 import {
-  db,
   upsertUser,
   getUserByTelegramId,
   getSetting,
   setSetting,
 } from "./database/db.js";
+import { getTenantDb } from "./database/tenant_factory.js";
 import { t, getLanguageButtons } from "./i18n.js";
 import { startReminderScheduler } from "./handlers/reminders.js";
 import {
@@ -47,7 +48,7 @@ import {
 import { startAuthServer } from "./auth-server.js";
 import { getLogger } from "./utils/logger.js";
 
-const limit = getRateLimit({ interval: 1000, rate: 50 });
+const limit = getRateLimit ? getRateLimit({ interval: 1000, rate: 50 }) : () => Promise.resolve();
 export const bot = new Bot(BOT_TOKEN);
 
 function initialSession() {
@@ -57,10 +58,9 @@ function initialSession() {
 bot.use(session({ initial: initialSession }));
 
 bot.use(async (ctx, next) => {
-  await limit();
+  if (typeof limit === 'function') await limit();
   ctx.tenantId = TENANT_ID;
-  const tenant = db.prepare("SELECT timezone FROM tenants WHERE id = ?").get(TENANT_ID);
-  ctx.timezone = tenant?.timezone || TIMEZONE;
+  ctx.timezone = TIMEZONE;
   ctx.logger = getLogger(ctx.tenantId);
   await next();
 });
@@ -96,7 +96,7 @@ bot.on("callback_query:data", async (ctx, next) => {
     ctx.session.language = l;
     upsertUser(ctx.tenantId, ctx.from.id, { language: l });
     await ctx.answerCallbackQuery();
-    await updateMainMenu(ctx, l);
+    await updateMainMenu(ctx, lang);
     return;
   }
 
