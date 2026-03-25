@@ -45,6 +45,7 @@ import {
   handleServicePriceInput,
 } from "./handlers/admin.js";
 import { startAuthServer } from "./auth-server.js";
+import { getLogger } from "./utils/logger.js";
 
 const limit = getRateLimit({ interval: 1000, rate: 50 });
 export const bot = new Bot(BOT_TOKEN);
@@ -60,6 +61,7 @@ bot.use(async (ctx, next) => {
   ctx.tenantId = TENANT_ID;
   const tenant = db.prepare("SELECT timezone FROM tenants WHERE id = ?").get(TENANT_ID);
   ctx.timezone = tenant?.timezone || TIMEZONE;
+  ctx.logger = getLogger(ctx.tenantId);
   await next();
 });
 

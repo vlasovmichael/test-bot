@@ -4,7 +4,8 @@
   "description": "Telegram booking bot for a nail artist in Poland (grammY + SQLite).",
   "main": "bot.js",
   "scripts": {
-    "start": "node bot.js"
+    "start": "node bot.js",
+    "test": "vitest run"
   },
   "type": "module",
   "keywords": [
@@ -27,6 +28,8 @@
     "luxon": "^3.7.2",
     "node-cron": "^3.0.3",
     "p-ratelimit": "^1.0.1",
+    "winston": "^3.19.0",
+    "winston-daily-rotate-file": "^5.0.0",
     "zod": "^4.3.6"
   },
   "devDependencies": {
